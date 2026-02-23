@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>indri Analyzer</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="bg-orb orb-a"></div>
+  <div class="bg-orb orb-b"></div>
+
+  <main class="page">
+    <section class="card" id="login-card">
+      <h1>indri</h1>
+      <p class="sub">Masukkan access code untuk mulai analisa.</p>
+      <form id="login-form" class="stack">
+        <label for="access-code">Access code</label>
+        <input id="access-code" type="password" autocomplete="off" placeholder="Masukkan access code" required />
+        <button type="submit">Login</button>
+      </form>
+      <p class="error hidden" id="login-error"></p>
+    </section>
+
+    <section class="card hidden" id="analyzer-card">
+      <div class="header-row">
+        <div>
+          <h2>Upload Analyzer</h2>
+          <p class="sub">Upload file, pilih tipe proses, lalu download output.</p>
+        </div>
+        <button class="ghost" id="logout-btn" type="button">Logout</button>
+      </div>
+
+      <form id="analyze-form" class="stack">
+        <label for="upload-file">1. Input file</label>
+        <input id="upload-file" type="file" accept=".xlsx,.csv" required />
+
+        <label for="analyze-type">2. Tipe file</label>
+        <select id="analyze-type" required>
+          <option value="ippd-hourly">ippd-hourly</option>
+          <option value="twamp-hourly">twamp-hourly</option>
+          <option value="twamp-daily">twamp-daily</option>
+          <option value="s1-hourly">s1-hourly</option>
+          <option value="s1-daily">s1-daily</option>
+          <option value="wpcsdm-step1">wpcsdm-step1</option>
+          <option value="wpcsdm-transform">wpcsdm-transform</option>
+        </select>
+
+        <section class="companion hidden" id="companion-fields">
+          <h3>File pendukung WPCSDM</h3>
+
+          <label for="companion-sfxl">Upload SFXL</label>
+          <input id="companion-sfxl" type="file" accept=".xlsx" />
+
+          <label for="companion-sitelist">Upload sitelist</label>
+          <input id="companion-sitelist" type="file" accept=".csv,.xlsx" />
+
+          <label for="companion-tagging">Upload tagging</label>
+          <input id="companion-tagging" type="file" accept=".xlsx,.csv" />
+        </section>
+
+        <button id="submit-btn" type="submit">3. Upload & Proses</button>
+      </form>
+
+      <div class="loading hidden" id="loading-box" aria-live="polite">
+        <div class="spinner"></div>
+        <p id="loading-text">Memproses data</p>
+      </div>
+
+      <p class="note">Catatan: untuk mode wpcsdm, upload file pendukung di form tambahan. Limit aplikasi: 70MB per file.</p>
+
+      <p class="error hidden" id="analyze-error"></p>
+
+      <section class="result hidden" id="result-box">
+        <h3>Output siap</h3>
+        <p id="result-name"></p>
+        <a id="download-link" class="download" href="#" download>Download output</a>
+      </section>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

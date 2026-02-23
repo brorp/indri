@@ -1,0 +1,13 @@
+node_modules/
+npm-debug.log*
+.DS_Store
+.env
+.env.*
+
+# Generated analyzer outputs
+output-*.xlsx
+*.tmp.xlsx
+
+# Runtime temp artifacts
+tmp/
+temp/
