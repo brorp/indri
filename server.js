@@ -97,6 +97,21 @@ async function fileExists(targetPath) {
   }
 }
 
+async function resolveScriptPath(scriptFileName) {
+  const candidates = [
+    path.join(SCRIPT_DIR, scriptFileName),
+    path.join(BASE_DIR, "scripts", scriptFileName),
+    path.join(process.cwd(), scriptFileName),
+    path.join(process.cwd(), "scripts", scriptFileName),
+  ];
+
+  for (const candidate of candidates) {
+    if (await fileExists(candidate)) return candidate;
+  }
+
+  return null;
+}
+
 async function resolveCompanionAsset(fileName, envVarName) {
   const envPath = process.env[envVarName];
   const candidates = [
@@ -172,12 +187,13 @@ async function getLatestOutputXlsx(jobDir, inputPath) {
 }
 
 async function executeAnalyzer({ type, originalName, fileBuffer, companions }) {
-  const cfg = TYPE_MAP[type];
+  const normalizedType = String(type || "").trim().replace(/\.js$/i, "");
+  const cfg = TYPE_MAP[normalizedType];
   if (!cfg) throw new Error("Unsupported analyzer type.");
 
-  const scriptPath = path.join(SCRIPT_DIR, cfg.script);
-  if (!(await fileExists(scriptPath))) {
-    throw new Error(`Script not found: ${cfg.script}`);
+  const scriptPath = await resolveScriptPath(cfg.script);
+  if (!scriptPath) {
+    throw new Error(`Script not found: ${cfg.script}. Checked root/scripts in app dir and cwd.`);
   }
 
   const tempPrefix = path.join(os.tmpdir(), "indri-");
@@ -236,12 +252,13 @@ async function executeAnalyzer({ type, originalName, fileBuffer, companions }) {
 app.post("/api/analyze", async (req, res) => {
   try {
     const { accessCode, type, fileName, fileData, companions } = req.body || {};
+    const normalizedType = String(type || "").trim().replace(/\.js$/i, "");
 
     if (accessCode !== ACCESS_CODE) {
       return res.status(401).json({ error: "Access code salah." });
     }
 
-    if (!type || !TYPE_MAP[type]) {
+    if (!normalizedType || !TYPE_MAP[normalizedType]) {
       return res.status(400).json({ error: "Tipe file tidak valid." });
     }
 
@@ -251,7 +268,7 @@ app.post("/api/analyze", async (req, res) => {
 
     const buffer = decodeBase64File(fileData);
     const { outputBuffer, outputName } = await executeAnalyzer({
-      type,
+      type: normalizedType,
       originalName: fileName,
       fileBuffer: buffer,
       companions,
