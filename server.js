@@ -14,6 +14,15 @@ const MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024;
 const BASE_DIR = __dirname;
 const SCRIPT_DIR = BASE_DIR;
 const ASSET_DIR = path.join(BASE_DIR, "assets");
+const ANALYZER_ABS_PATHS = {
+  "ippd-hourly.js": path.join(BASE_DIR, "ippd-hourly.js"),
+  "twamp-hourly.js": path.join(BASE_DIR, "twamp-hourly.js"),
+  "twamp-daily.js": path.join(BASE_DIR, "twamp-daily.js"),
+  "s1-hourly.js": path.join(BASE_DIR, "s1-hourly.js"),
+  "s1-daily.js": path.join(BASE_DIR, "s1-daily.js"),
+  "wpcsdm_step1.js": path.join(BASE_DIR, "wpcsdm_step1.js"),
+  "wpcsdm_transform.js": path.join(BASE_DIR, "wpcsdm_transform.js"),
+};
 
 const TYPE_MAP = {
   "ippd-hourly": { script: "ippd-hourly.js" },
@@ -39,6 +48,15 @@ const WPC_DEFAULT_ASSETS = {
 
 app.use(express.json({ limit: "120mb" }));
 app.use(express.static(path.join(BASE_DIR, "public")));
+
+// Keep static references to analyzer files so deployment tracers include them.
+for (const p of Object.values(ANALYZER_ABS_PATHS)) {
+  try {
+    fs.accessSync(p, fs.constants.F_OK);
+  } catch {
+    // optional: missing files are handled during request validation.
+  }
+}
 
 function sanitizeFileName(name, fallback = "input.xlsx") {
   const picked = path.basename(name || fallback);
@@ -99,17 +117,18 @@ async function fileExists(targetPath) {
 
 async function resolveScriptPath(scriptFileName) {
   const candidates = [
+    ANALYZER_ABS_PATHS[scriptFileName],
     path.join(SCRIPT_DIR, scriptFileName),
     path.join(BASE_DIR, "scripts", scriptFileName),
     path.join(process.cwd(), scriptFileName),
     path.join(process.cwd(), "scripts", scriptFileName),
-  ];
+  ].filter(Boolean);
 
   for (const candidate of candidates) {
     if (await fileExists(candidate)) return candidate;
   }
 
-  return null;
+  return { found: null, checked: candidates };
 }
 
 async function resolveCompanionAsset(fileName, envVarName) {
@@ -191,9 +210,11 @@ async function executeAnalyzer({ type, originalName, fileBuffer, companions }) {
   const cfg = TYPE_MAP[normalizedType];
   if (!cfg) throw new Error("Unsupported analyzer type.");
 
-  const scriptPath = await resolveScriptPath(cfg.script);
+  const resolvedScript = await resolveScriptPath(cfg.script);
+  const scriptPath = typeof resolvedScript === "string" ? resolvedScript : resolvedScript.found;
   if (!scriptPath) {
-    throw new Error(`Script not found: ${cfg.script}. Checked root/scripts in app dir and cwd.`);
+    const checked = (resolvedScript.checked || []).join(" | ");
+    throw new Error(`Script not found: ${cfg.script}. Checked: ${checked}`);
   }
 
   const tempPrefix = path.join(os.tmpdir(), "indri-");
