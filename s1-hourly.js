@@ -4,7 +4,6 @@ const output_name_str = (process.argv[2].match(/(\d{6,8})/) || ["", "output"])[1
 const OUTPUT_FILE = `output-s1-hourly-${output_name_str}.xlsx`;
 const THRESHOLD_GT = 99;
 
-const SHEET_GRAFIK = ["GRAFFIK", "GRAFIK", "GRAFFIK ", "GRAFIK "];
 const SHEET_DATA = ["DATA", "DATA ", "DATA  "];
 const SHEET_SITE = ["SITE LIST S1 SR", "SITE LIST", "SITELIST S1 SR", "SITELIST"];
 
@@ -104,29 +103,13 @@ async function run(inputPath) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(inputPath);
 
-  const wsGrafik = pickWorksheet(wb, SHEET_GRAFIK);
-  if (!wsGrafik) throw new Error(`GRAFFIK sheet not found (tried: ${SHEET_GRAFIK.join(", ")})`);
-
   const wsData = pickWorksheet(wb, SHEET_DATA);
   if (!wsData) throw new Error(`DATA sheet not found (tried: ${SHEET_DATA.join(", ")})`);
 
   const wsSite = pickWorksheet(wb, SHEET_SITE);
   if (!wsSite) throw new Error(`SITE LIST sheet not found (tried: ${SHEET_SITE.join(", ")})`);
 
-  // --- 1) Take LAST 5 Row Labels from GRAFFIK col A ---
-  const grafikHourMs = [];
-  wsGrafik.eachRow((row) => {
-    const ms = getDateMs(row.getCell(1).value);
-    if (ms !== null) grafikHourMs.push(floorToHourMs(ms));
-  });
-
-  if (grafikHourMs.length < 5) {
-    throw new Error(`GRAFFIK col A has only ${grafikHourMs.length} datetime rows; need >= 5.`);
-  }
-
-  const last5HourMs = grafikHourMs.slice(-5); // EXACTLY bottom-5 from GRAFFIK
-
-  // --- 2) Build DATA map: CEK -> Map(hourMs -> max(S1 Success Rate)) ---
+  // --- 1) Build DATA map: CEK -> Map(hourMs -> max(S1 Success Rate)) ---
   const hmap = buildHeaderMap(wsData);
   const colTime = hmap.get("time");
   const colCek = hmap.get("cek");
@@ -165,7 +148,7 @@ async function run(inputPath) {
     if (prev === undefined || v > prev) m.set(hourMs, v);
   });
 
-  // --- 3) CEK list source: SITE LIST S1 SR -> Entity_ID ---
+  // --- 2) CEK list source: SITE LIST S1 SR -> Entity_ID ---
   const siteH = buildHeaderMap(wsSite);
   const colEntity = siteH.get("entity_id") || siteH.get("entity id") || 1; // fallback col 1
 
@@ -178,7 +161,7 @@ async function run(inputPath) {
 
   const cekList = Array.from(cekSet).sort((a, b) => a.localeCompare(b));
 
-  // --- 4) Output ---
+  // --- 3) Output ---
   const outWb = new ExcelJS.Workbook();
   const outWs = outWb.addWorksheet("Sheet1");
   outWs.addRow(["CEK", "STATUS"]);
@@ -190,7 +173,8 @@ async function run(inputPath) {
     }
 
     const hourMap = cekHourMax.get(cek) || new Map();
-    const lastVals = last5HourMs.map(ms => hourMap.get(ms)); // EXACT match by hourMs
+    const last5HourMs = Array.from(hourMap.keys()).sort((a, b) => a - b).slice(-5);
+    const lastVals = last5HourMs.map(ms => hourMap.get(ms)); // each CEK's own latest 5
 
     const status = decideStatus(lastVals);
     outWs.addRow([cek, status]);
@@ -202,15 +186,14 @@ async function run(inputPath) {
   await outWb.xlsx.writeFile(OUTPUT_FILE);
 
   console.log(`✅ Generated ${OUTPUT_FILE}`);
-  console.log(`📌 Sheets: DATA="${wsData.name}", GRAFFIK="${wsGrafik.name}", SITE="${wsSite.name}"`);
-  console.log(`📌 Last 5 Row Labels (from GRAFFIK): ${last5HourMs.map(ms => new Date(ms).toISOString()).join(" | ")}`);
-  console.log(`📌 Rule: CLOSE only if ALL last-5 values > ${THRESHOLD_GT}; missing => OPEN; no numeric => NO DATA`);
+  console.log(`📌 Sheets: DATA="${wsData.name}", SITE="${wsSite.name}"`);
+  console.log(`📌 Rule: CLOSE only if each CEK's own last-5 values >= ${THRESHOLD_GT}; missing/<5 => OPEN; no numeric => NO DATA`);
   console.log(`📌 Total CEK from SITE LIST: ${cekList.length}`);
 }
 
 const inputFile = process.argv[2];
 if (!inputFile) {
-  console.log('Usage: node agent_s1_pivot_last5_like_twamp.js "ANALISA S1 SR 18022026.xlsx"');
+  console.log('Usage: node s1-hourly.js "ANALISA S1 SR 18022026.xlsx"');
   process.exit(1);
 }
 

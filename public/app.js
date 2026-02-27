@@ -1,7 +1,10 @@
-const ACCESS_CODE = "indricantik";
 const STORAGE_KEY = "bot_indri_access_code";
-const MAX_FILE_MB = 70;
-const MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024;
+const FALLBACK_MAX_FILE_MB = 70;
+
+let runtimeMaxFileMb = FALLBACK_MAX_FILE_MB;
+let storageEnabled = false;
+let storageConfigLoaded = false;
+let storageConfigPromise = null;
 
 const loginCard = document.getElementById("login-card");
 const analyzerCard = document.getElementById("analyzer-card");
@@ -84,8 +87,9 @@ function fileToBase64(file) {
 
 function assertFileWithinLimit(file, label) {
   if (!file) return;
-  if (file.size > MAX_FILE_BYTES) {
-    throw new Error(`${label} melebihi batas ${MAX_FILE_MB}MB.`);
+  const maxFileBytes = runtimeMaxFileMb * 1024 * 1024;
+  if (file.size > maxFileBytes) {
+    throw new Error(`${label} melebihi batas ${runtimeMaxFileMb}MB.`);
   }
 }
 
@@ -135,12 +139,114 @@ function logout() {
   }
 }
 
+async function parseErrorResponse(response, fallbackMessage) {
+  const rawText = await response.text();
+  if (!rawText || !rawText.trim()) return fallbackMessage;
+
+  try {
+    const errJson = JSON.parse(rawText);
+    if (errJson && errJson.error) return errJson.error;
+  } catch {
+    // keep raw text fallback
+  }
+
+  return rawText.trim();
+}
+
+async function loadStorageConfig() {
+  try {
+    const response = await fetch("/api/storage/config", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const config = await response.json();
+    storageEnabled = Boolean(config && config.enabled);
+
+    const parsedMaxMb = Number(config?.maxFileMb);
+    if (Number.isFinite(parsedMaxMb) && parsedMaxMb > 0) {
+      runtimeMaxFileMb = parsedMaxMb;
+    }
+  } catch {
+    storageEnabled = false;
+  } finally {
+    storageConfigLoaded = true;
+  }
+}
+
+function ensureStorageConfig() {
+  if (storageConfigLoaded) {
+    return Promise.resolve();
+  }
+
+  if (!storageConfigPromise) {
+    storageConfigPromise = loadStorageConfig().finally(() => {
+      storageConfigPromise = null;
+    });
+  }
+
+  return storageConfigPromise;
+}
+
+async function getSignedUploadUrl({ accessCode, fileName, type }) {
+  const response = await fetch("/api/storage/upload-url", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      accessCode,
+      fileName,
+      type,
+    }),
+  });
+
+  if (!response.ok) {
+    const message = await parseErrorResponse(
+      response,
+      `Gagal membuat upload URL (HTTP ${response.status}).`
+    );
+    throw new Error(message);
+  }
+
+  const payload = await response.json();
+  if (!payload.uploadUrl || !payload.path) {
+    throw new Error("Upload URL Supabase tidak valid.");
+  }
+
+  return payload;
+}
+
+async function uploadFileToStorage({ accessCode, file, type }) {
+  const { uploadUrl, path } = await getSignedUploadUrl({
+    accessCode,
+    fileName: file.name,
+    type,
+  });
+
+  const uploadResponse = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: {
+      "Content-Type": file.type || "application/octet-stream",
+    },
+    body: file,
+  });
+
+  if (!uploadResponse.ok) {
+    const rawText = await uploadResponse.text();
+    const detail = rawText && rawText.trim() ? `: ${rawText.trim()}` : "";
+    throw new Error(`Gagal upload ke Supabase (HTTP ${uploadResponse.status})${detail}`);
+  }
+
+  return path;
+}
+
 loginForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const code = (loginInput.value || "").trim();
 
-  if (code !== ACCESS_CODE) {
-    showError(loginError, "Access code salah.");
+  if (!code) {
+    showError(loginError, "Access code wajib diisi.");
     return;
   }
 
@@ -165,7 +271,10 @@ analyzeForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  if (needCompanion && (!companionSfxlInput.files[0] || !companionSitelistInput.files[0] || !companionTaggingInput.files[0])) {
+  if (
+    needCompanion &&
+    (!companionSfxlInput.files[0] || !companionSitelistInput.files[0] || !companionTaggingInput.files[0])
+  ) {
     showError(analyzeError, "Untuk mode wpcsdm, upload SFXL, sitelist, dan tagging.");
     return;
   }
@@ -177,35 +286,75 @@ analyzeForm.addEventListener("submit", async (event) => {
   }
 
   try {
-    assertFileWithinLimit(file, "File utama");
-
+    await ensureStorageConfig();
     startLoading();
 
-    const fileData = await fileToBase64(file);
-    let companions = null;
-    if (needCompanion) {
-      const sfxlFile = companionSfxlInput.files[0];
-      const sitelistFile = companionSitelistInput.files[0];
-      const taggingFile = companionTaggingInput.files[0];
+    const payload = {
+      accessCode,
+      type,
+      fileName: file.name,
+    };
 
-      assertFileWithinLimit(sfxlFile, "File SFXL");
-      assertFileWithinLimit(sitelistFile, "File sitelist");
-      assertFileWithinLimit(taggingFile, "File tagging");
-
-      companions = {
-        sfxl: {
-          fileName: sfxlFile.name,
-          fileData: await fileToBase64(sfxlFile),
-        },
-        sitelist: {
-          fileName: sitelistFile.name,
-          fileData: await fileToBase64(sitelistFile),
-        },
-        tagging: {
-          fileName: taggingFile.name,
-          fileData: await fileToBase64(taggingFile),
-        },
+    if (storageEnabled) {
+      const storage = {
+        inputPath: await uploadFileToStorage({ accessCode, file, type }),
       };
+
+      if (needCompanion) {
+        const [sfxlPath, sitelistPath, taggingPath] = await Promise.all([
+          uploadFileToStorage({
+            accessCode,
+            file: companionSfxlInput.files[0],
+            type: `${type}-sfxl`,
+          }),
+          uploadFileToStorage({
+            accessCode,
+            file: companionSitelistInput.files[0],
+            type: `${type}-sitelist`,
+          }),
+          uploadFileToStorage({
+            accessCode,
+            file: companionTaggingInput.files[0],
+            type: `${type}-tagging`,
+          }),
+        ]);
+
+        storage.companions = {
+          sfxl: sfxlPath,
+          sitelist: sitelistPath,
+          tagging: taggingPath,
+        };
+      }
+
+      payload.storage = storage;
+    } else {
+      assertFileWithinLimit(file, "File utama");
+      payload.fileData = await fileToBase64(file);
+
+      if (needCompanion) {
+        const sfxlFile = companionSfxlInput.files[0];
+        const sitelistFile = companionSitelistInput.files[0];
+        const taggingFile = companionTaggingInput.files[0];
+
+        assertFileWithinLimit(sfxlFile, "File SFXL");
+        assertFileWithinLimit(sitelistFile, "File sitelist");
+        assertFileWithinLimit(taggingFile, "File tagging");
+
+        payload.companions = {
+          sfxl: {
+            fileName: sfxlFile.name,
+            fileData: await fileToBase64(sfxlFile),
+          },
+          sitelist: {
+            fileName: sitelistFile.name,
+            fileData: await fileToBase64(sitelistFile),
+          },
+          tagging: {
+            fileName: taggingFile.name,
+            fileData: await fileToBase64(taggingFile),
+          },
+        };
+      }
     }
 
     const response = await fetch("/api/analyze", {
@@ -213,23 +362,20 @@ analyzeForm.addEventListener("submit", async (event) => {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        accessCode,
-        type,
-        fileName: file.name,
-        fileData,
-        companions,
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
-      let message = "Gagal memproses file.";
-      try {
-        const errJson = await response.json();
-        if (errJson && errJson.error) message = errJson.error;
-      } catch {
-        // ignore json parse error
+      if (response.status === 413) {
+        throw new Error(
+          "Upload terlalu besar untuk request body Vercel. Aktifkan Supabase Storage agar upload langsung ke bucket."
+        );
       }
+
+      const message = await parseErrorResponse(
+        response,
+        `Gagal memproses file (HTTP ${response.status}).`
+      );
       throw new Error(message);
     }
 
@@ -256,7 +402,8 @@ analyzeForm.addEventListener("submit", async (event) => {
 const savedCode = localStorage.getItem(STORAGE_KEY);
 stopLoading();
 toggleCompanionFields();
-if (savedCode === ACCESS_CODE) {
+ensureStorageConfig();
+if (savedCode) {
   setLoggedIn(true);
 } else {
   setLoggedIn(false);

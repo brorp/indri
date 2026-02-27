@@ -3,13 +3,39 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const os = require("os");
 const path = require("path");
+const { randomUUID } = require("crypto");
 const { spawn } = require("child_process");
+
+let createClient = null;
+try {
+  ({ createClient } = require("@supabase/supabase-js"));
+} catch {
+  createClient = null;
+}
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const ACCESS_CODE = process.env.BOT_INDRI_CODE || "indricantik";
 const MAX_FILE_MB = Number(process.env.MAX_FILE_MB || 70);
 const MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024;
+const SUPABASE_URL = process.env.SUPABASE_URL || "";
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const SUPABASE_BUCKET = process.env.SUPABASE_BUCKET || "";
+const SUPABASE_UPLOAD_PREFIX = String(process.env.SUPABASE_UPLOAD_PREFIX || "indri-uploads").replace(
+  /^\/+|\/+$/g,
+  ""
+);
+const SUPABASE_DELETE_AFTER_PROCESS =
+  String(process.env.SUPABASE_DELETE_AFTER_PROCESS || "true").toLowerCase() !== "false";
+const SUPABASE_ENABLED = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && SUPABASE_BUCKET);
+const supabase = SUPABASE_ENABLED && createClient
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    })
+  : null;
 
 const BASE_DIR = __dirname;
 const SCRIPT_DIR = BASE_DIR;
@@ -63,6 +89,70 @@ function sanitizeFileName(name, fallback = "input.xlsx") {
   const cleaned = picked.replace(/[^a-zA-Z0-9._-]/g, "_");
   if (!cleaned) return fallback;
   return cleaned;
+}
+
+function sanitizePathSegment(value, fallback = "misc") {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return cleaned || fallback;
+}
+
+function normalizeStoragePath(input) {
+  return String(input || "").replace(/^\/+/, "").trim();
+}
+
+function encodeStoragePathForUrl(objectPath) {
+  return normalizeStoragePath(objectPath)
+    .split("/")
+    .filter(Boolean)
+    .map((seg) => encodeURIComponent(seg))
+    .join("/");
+}
+
+function buildStorageObjectPath(type, fileName) {
+  const day = new Date().toISOString().slice(0, 10);
+  const typePart = sanitizePathSegment(type, "misc");
+  const safeFileName = sanitizeFileName(fileName, "upload.xlsx");
+  const prefix = SUPABASE_UPLOAD_PREFIX ? `${SUPABASE_UPLOAD_PREFIX}/` : "";
+  return `${prefix}${typePart}/${day}/${randomUUID()}-${safeFileName}`;
+}
+
+function resolveSignedUploadUrl(signedUrl, objectPath, token) {
+  if (signedUrl && /^https?:\/\//i.test(signedUrl)) {
+    return signedUrl;
+  }
+
+  const base = SUPABASE_URL.replace(/\/+$/g, "");
+  if (signedUrl) {
+    if (signedUrl.startsWith("/storage/v1/")) return `${base}${signedUrl}`;
+    if (signedUrl.startsWith("/")) return `${base}/storage/v1${signedUrl}`;
+    return `${base}/storage/v1/${signedUrl}`;
+  }
+
+  if (!token) return null;
+  const encodedPath = encodeStoragePathForUrl(objectPath);
+  return `${base}/storage/v1/object/upload/sign/${SUPABASE_BUCKET}/${encodedPath}?token=${encodeURIComponent(
+    token
+  )}`;
+}
+
+function ensureSupabaseReady() {
+  if (supabase) return;
+  if (!createClient) {
+    throw new Error("Package @supabase/supabase-js belum ter-install di server.");
+  }
+  throw new Error(
+    "Supabase storage belum dikonfigurasi. Set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, dan SUPABASE_BUCKET."
+  );
+}
+
+function isManagedStoragePath(objectPath) {
+  const normalized = normalizeStoragePath(objectPath);
+  if (!normalized || !SUPABASE_UPLOAD_PREFIX) return false;
+  return normalized.startsWith(`${SUPABASE_UPLOAD_PREFIX}/`);
 }
 
 function decodeBase64File(fileData) {
@@ -148,6 +238,66 @@ async function resolveCompanionAsset(fileName, envVarName) {
   );
 }
 
+async function downloadStorageObjectToPath(objectPath, outputPath) {
+  ensureSupabaseReady();
+  const normalizedPath = normalizeStoragePath(objectPath);
+  if (!normalizedPath) {
+    throw new Error("Storage path kosong.");
+  }
+
+  const { data, error } = await supabase.storage.from(SUPABASE_BUCKET).download(normalizedPath);
+  if (error) {
+    throw new Error(`Gagal download dari Supabase (${normalizedPath}): ${error.message}`);
+  }
+
+  if (!data) {
+    throw new Error(`Object Supabase tidak ditemukan: ${normalizedPath}`);
+  }
+
+  const arrayBuffer = await data.arrayBuffer();
+  const fileBuffer = Buffer.from(arrayBuffer);
+  if (!fileBuffer.length) {
+    throw new Error(`Object Supabase kosong: ${normalizedPath}`);
+  }
+
+  await fsp.writeFile(outputPath, fileBuffer);
+  return normalizedPath;
+}
+
+async function writeCompanionFromAnySource({
+  jobDir,
+  uploaded,
+  storagePath,
+  fallbackName,
+  assetEnvVarName,
+  managedStorageCleanupPaths,
+}) {
+  const uploadedPath = await writeUploadedFile(jobDir, uploaded, fallbackName);
+  if (uploadedPath) return uploadedPath;
+
+  if (storagePath) {
+    const targetPath = path.join(jobDir, sanitizeFileName(fallbackName, "companion.xlsx"));
+    const normalizedStoragePath = await downloadStorageObjectToPath(storagePath, targetPath);
+    if (isManagedStoragePath(normalizedStoragePath)) {
+      managedStorageCleanupPaths.push(normalizedStoragePath);
+    }
+    return targetPath;
+  }
+
+  return resolveCompanionAsset(fallbackName, assetEnvVarName);
+}
+
+async function maybeDeleteStorageObjects(objectPaths) {
+  if (!SUPABASE_DELETE_AFTER_PROCESS || !supabase) return;
+  const uniqueManagedPaths = [...new Set(objectPaths.filter((p) => isManagedStoragePath(p)))];
+  if (!uniqueManagedPaths.length) return;
+
+  const { error } = await supabase.storage.from(SUPABASE_BUCKET).remove(uniqueManagedPaths);
+  if (error) {
+    console.warn("Failed to cleanup Supabase objects:", error.message);
+  }
+}
+
 function spawnNode(commandArgs, cwd) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, commandArgs, {
@@ -205,7 +355,7 @@ async function getLatestOutputXlsx(jobDir, inputPath) {
   return candidates[0].fullPath;
 }
 
-async function executeAnalyzer({ type, originalName, fileBuffer, companions }) {
+async function executeAnalyzer({ type, originalName, fileBuffer, companions, storage }) {
   const normalizedType = String(type || "").trim().replace(/\.js$/i, "");
   const cfg = TYPE_MAP[normalizedType];
   if (!cfg) throw new Error("Unsupported analyzer type.");
@@ -219,11 +369,23 @@ async function executeAnalyzer({ type, originalName, fileBuffer, companions }) {
 
   const tempPrefix = path.join(os.tmpdir(), "indri-");
   const jobDir = await fsp.mkdtemp(tempPrefix);
+  const managedStorageCleanupPaths = [];
 
   try {
     const inputName = sanitizeFileName(originalName, "input.xlsx");
     const inputPath = path.join(jobDir, inputName);
-    await fsp.writeFile(inputPath, fileBuffer);
+
+    if (storage?.inputPath) {
+      const normalizedStoragePath = await downloadStorageObjectToPath(storage.inputPath, inputPath);
+      if (isManagedStoragePath(normalizedStoragePath)) {
+        managedStorageCleanupPaths.push(normalizedStoragePath);
+      }
+    } else {
+      if (!fileBuffer) {
+        throw new Error("File upload belum diisi.");
+      }
+      await fsp.writeFile(inputPath, fileBuffer);
+    }
 
     const args = [scriptPath];
     let explicitOutputPath = null;
@@ -231,19 +393,42 @@ async function executeAnalyzer({ type, originalName, fileBuffer, companions }) {
     if (!cfg.mode) {
       args.push(inputPath);
     } else if (cfg.mode === "wpc-step1") {
-      const uploadedSfxlPath = await writeUploadedFile(jobDir, companions?.sfxl, WPC_DEFAULT_ASSETS.sfxl);
-      const sfxlPath = uploadedSfxlPath || await resolveCompanionAsset(WPC_DEFAULT_ASSETS.sfxl, "BOT_INDRI_SFXL_PATH");
+      const sfxlPath = await writeCompanionFromAnySource({
+        jobDir,
+        uploaded: companions?.sfxl,
+        storagePath: storage?.companions?.sfxl,
+        fallbackName: WPC_DEFAULT_ASSETS.sfxl,
+        assetEnvVarName: "BOT_INDRI_SFXL_PATH",
+        managedStorageCleanupPaths,
+      });
       explicitOutputPath = path.join(jobDir, "output-wpcsdm-step1.xlsx");
 
       args.push("--wpc", inputPath, "--sfxl", sfxlPath, "--out", explicitOutputPath);
     } else if (cfg.mode === "wpc-transform") {
-      const uploadedSfxlPath = await writeUploadedFile(jobDir, companions?.sfxl, WPC_DEFAULT_ASSETS.sfxl);
-      const uploadedSitelistPath = await writeUploadedFile(jobDir, companions?.sitelist, WPC_DEFAULT_ASSETS.sitelist);
-      const uploadedTaggingPath = await writeUploadedFile(jobDir, companions?.tagging, WPC_DEFAULT_ASSETS.tagging);
-
-      const sfxlPath = uploadedSfxlPath || await resolveCompanionAsset(WPC_DEFAULT_ASSETS.sfxl, "BOT_INDRI_SFXL_PATH");
-      const sitelistPath = uploadedSitelistPath || await resolveCompanionAsset(WPC_DEFAULT_ASSETS.sitelist, "BOT_INDRI_SITELIST_PATH");
-      const taggingPath = uploadedTaggingPath || await resolveCompanionAsset(WPC_DEFAULT_ASSETS.tagging, "BOT_INDRI_TAGGING_PATH");
+      const sfxlPath = await writeCompanionFromAnySource({
+        jobDir,
+        uploaded: companions?.sfxl,
+        storagePath: storage?.companions?.sfxl,
+        fallbackName: WPC_DEFAULT_ASSETS.sfxl,
+        assetEnvVarName: "BOT_INDRI_SFXL_PATH",
+        managedStorageCleanupPaths,
+      });
+      const sitelistPath = await writeCompanionFromAnySource({
+        jobDir,
+        uploaded: companions?.sitelist,
+        storagePath: storage?.companions?.sitelist,
+        fallbackName: WPC_DEFAULT_ASSETS.sitelist,
+        assetEnvVarName: "BOT_INDRI_SITELIST_PATH",
+        managedStorageCleanupPaths,
+      });
+      const taggingPath = await writeCompanionFromAnySource({
+        jobDir,
+        uploaded: companions?.tagging,
+        storagePath: storage?.companions?.tagging,
+        fallbackName: WPC_DEFAULT_ASSETS.tagging,
+        assetEnvVarName: "BOT_INDRI_TAGGING_PATH",
+        managedStorageCleanupPaths,
+      });
       explicitOutputPath = path.join(jobDir, "output-wpcsdm-transform.xlsx");
 
       args.push(
@@ -267,13 +452,62 @@ async function executeAnalyzer({ type, originalName, fileBuffer, companions }) {
     return { outputBuffer, outputName };
   } finally {
     await fsp.rm(jobDir, { recursive: true, force: true });
+    await maybeDeleteStorageObjects(managedStorageCleanupPaths);
   }
 }
 
+app.get("/api/storage/config", (_req, res) => {
+  res.json({
+    enabled: Boolean(supabase),
+    maxFileMb: MAX_FILE_MB,
+  });
+});
+
+app.post("/api/storage/upload-url", async (req, res) => {
+  try {
+    const { accessCode, fileName, type } = req.body || {};
+    if (accessCode !== ACCESS_CODE) {
+      return res.status(401).json({ error: "Access code salah." });
+    }
+
+    ensureSupabaseReady();
+    if (!fileName) {
+      return res.status(400).json({ error: "Nama file upload tidak valid." });
+    }
+
+    const normalizedType = String(type || "").trim().replace(/\.js$/i, "");
+    const objectPath = buildStorageObjectPath(normalizedType, fileName);
+    const { data, error } = await supabase
+      .storage
+      .from(SUPABASE_BUCKET)
+      .createSignedUploadUrl(objectPath);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const resolvedPath = normalizeStoragePath(data?.path || objectPath);
+    const uploadUrl = resolveSignedUploadUrl(data?.signedUrl, resolvedPath, data?.token);
+    if (!uploadUrl) {
+      throw new Error("Signed upload URL tidak tersedia.");
+    }
+
+    return res.json({
+      uploadUrl,
+      path: resolvedPath,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: err.message || "Gagal membuat upload URL.",
+    });
+  }
+});
+
 app.post("/api/analyze", async (req, res) => {
   try {
-    const { accessCode, type, fileName, fileData, companions } = req.body || {};
+    const { accessCode, type, fileName, fileData, companions, storage } = req.body || {};
     const normalizedType = String(type || "").trim().replace(/\.js$/i, "");
+    const hasStorageInput = Boolean(storage && storage.inputPath);
 
     if (accessCode !== ACCESS_CODE) {
       return res.status(401).json({ error: "Access code salah." });
@@ -283,16 +517,17 @@ app.post("/api/analyze", async (req, res) => {
       return res.status(400).json({ error: "Tipe file tidak valid." });
     }
 
-    if (!fileName || !fileData) {
+    if (!fileName || (!fileData && !hasStorageInput)) {
       return res.status(400).json({ error: "File upload belum diisi." });
     }
 
-    const buffer = decodeBase64File(fileData);
+    const buffer = fileData ? decodeBase64File(fileData) : null;
     const { outputBuffer, outputName } = await executeAnalyzer({
       type: normalizedType,
       originalName: fileName,
       fileBuffer: buffer,
       companions,
+      storage,
     });
 
     res.setHeader(

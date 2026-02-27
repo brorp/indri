@@ -30,9 +30,10 @@ Access code default: `indricantik`
 
 ## Lifecycle file upload
 
-- Semua file upload diproses di folder temporary (`os.tmpdir()`).
-- Setelah output terbentuk, folder temporary langsung dihapus otomatis.
-- File upload tidak disimpan permanen di project folder.
+- Tanpa Supabase: file dikirim base64 ke API lalu diproses di folder temporary (`os.tmpdir()`).
+- Dengan Supabase aktif: browser upload file langsung ke bucket, API hanya menerima path object.
+- Setelah output terbentuk, folder temporary lokal selalu dihapus otomatis.
+- Object upload di bucket dengan prefix `SUPABASE_UPLOAD_PREFIX` bisa dihapus otomatis setelah proses (`SUPABASE_DELETE_AFTER_PROCESS=true` default).
 
 ## Companion file untuk WPCSDM
 
@@ -51,9 +52,18 @@ Kalau tidak di-upload, server akan cari file dari urutan ini:
 - `BOT_INDRI_SFXL_PATH`
 - `BOT_INDRI_SITELIST_PATH`
 - `BOT_INDRI_TAGGING_PATH`
+- `MAX_FILE_MB` (default `70`, dipakai untuk mode base64/fallback)
+
+### Env vars Supabase (disarankan untuk Vercel)
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_BUCKET`
+- `SUPABASE_UPLOAD_PREFIX` (default `indri-uploads`)
+- `SUPABASE_DELETE_AFTER_PROCESS` (default `true`)
 
 ## Deploy Vercel
 
 Deploy folder `indri` sebagai project Vercel.
 
-Catatan: upload berbasis JSON base64, jadi ukuran request membesar sekitar 33%.
+Jika env Supabase di-set, upload file tidak melewati body function Vercel (langsung ke bucket), jadi aman dari limit payload request ±4.5MB.

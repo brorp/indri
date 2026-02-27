@@ -128,7 +128,6 @@ async function run(inputPath) {
 
   const cekDayMax = new Map();   // cek -> Map(ymd -> max)
   const cekHasAnyNumeric = new Set();
-  const daysWithData = new Set();
 
   wsData.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
@@ -148,7 +147,6 @@ async function run(inputPath) {
     const ymd = ymdFromMs(tMs);
 
     cekHasAnyNumeric.add(cek);
-    daysWithData.add(ymd);
 
     if (!cekDayMax.has(cek)) cekDayMax.set(cek, new Map());
     const m = cekDayMax.get(cek);
@@ -157,16 +155,7 @@ async function run(inputPath) {
     if (prev === undefined || v > prev) m.set(ymd, v);
   });
 
-  // --- 2) Determine last WINDOW_DAYS days (only days with valid numeric data) ---
-  const sortedDaysWithData = Array.from(daysWithData).sort();
-
-  if (sortedDaysWithData.length < WINDOW_DAYS) {
-    throw new Error(`Only ${sortedDaysWithData.length} days with valid data found; need >= ${WINDOW_DAYS}.`);
-  }
-
-  const lastDays = sortedDaysWithData.slice(-WINDOW_DAYS);
-
-  // --- 3) CEK list source: SITE LIST -> Entity_ID ---
+  // --- 2) CEK list source: SITE LIST -> Entity_ID ---
   const siteH = buildHeaderMap(wsSite);
   const colEntity = siteH.get("entity_id") || siteH.get("entity id") || 1;
 
@@ -179,7 +168,7 @@ async function run(inputPath) {
 
   const cekList = Array.from(cekSet).sort((a, b) => a.localeCompare(b));
 
-  // --- 4) Output ---
+  // --- 3) Output ---
   const outWb = new ExcelJS.Workbook();
   const outWs = outWb.addWorksheet("Sheet1");
   outWs.addRow(["CEK", "STATUS"]);
@@ -191,6 +180,7 @@ async function run(inputPath) {
     }
 
     const dayMap = cekDayMax.get(cek) || new Map();
+    const lastDays = Array.from(dayMap.keys()).sort().slice(-WINDOW_DAYS);
     const lastVals = lastDays.map(ymd => dayMap.get(ymd));
 
     const status = decideStatus(lastVals);
@@ -204,8 +194,8 @@ async function run(inputPath) {
 
   console.log(`✅ Generated ${OUTPUT_FILE}`);
   console.log(`📌 Sheets: DATA="${wsData.name}", SITE="${wsSite.name}"`);
-  console.log(`📌 WINDOW_DAYS=${WINDOW_DAYS} | Last day checked: ${lastDays.join(", ")}`);
-  console.log(`📌 Rule: CLOSE only if last ${WINDOW_DAYS} day(s) ALL > ${THRESHOLD_GT}; missing => OPEN; no numeric => NO DATA`);
+  console.log(`📌 WINDOW_DAYS=${WINDOW_DAYS}`);
+  console.log(`📌 Rule: CLOSE only if each CEK's own last ${WINDOW_DAYS} day(s) ALL >= ${THRESHOLD_GT}; missing/<window => OPEN; no numeric => NO DATA`);
   console.log(`📌 Total CEK from SITE LIST: ${cekList.length}`);
 }
 

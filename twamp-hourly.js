@@ -110,7 +110,6 @@ async function run(inputPath) {
   if (!wsSite) throw new Error(`SITE LIST sheet not found (tried: ${SHEET_SITE.join(", ")})`);
 
   // --- 1) Build DATA map: CEK -> Map(hourMs -> max(MAX TWAMP)) ---
-  //     Also track which hours have ANY valid numeric data globally
   const hmap = buildHeaderMap(wsData);
   const colTime = hmap.get("time");
   const colCek = hmap.get("cek");
@@ -126,7 +125,6 @@ async function run(inputPath) {
 
   const cekHourMax = new Map();   // cek -> Map(hourMs -> max)
   const cekHasAnyNumeric = new Set();
-  const hoursWithData = new Set(); // hours where at least 1 CEK has valid numeric data
 
   wsData.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
@@ -146,7 +144,6 @@ async function run(inputPath) {
     if (v === null) return; // # or - or empty => skip
 
     cekHasAnyNumeric.add(cek);
-    hoursWithData.add(hourMs);
 
     if (!cekHourMax.has(cek)) cekHourMax.set(cek, new Map());
     const m = cekHourMax.get(cek);
@@ -155,17 +152,7 @@ async function run(inputPath) {
     if (prev === undefined || v > prev) m.set(hourMs, v);
   });
 
-  // --- 2) Determine GLOBAL last 5 hours (only hours that have valid numeric data) ---
-  //     This skips "#"-only hours that would cause false OPENs
-  const sortedHoursWithData = Array.from(hoursWithData).sort((a, b) => a - b);
-
-  if (sortedHoursWithData.length < 5) {
-    throw new Error(`Only ${sortedHoursWithData.length} hours with valid data found; need >= 5.`);
-  }
-
-  const last5HourMs = sortedHoursWithData.slice(-5);
-
-  // --- 3) CEK list source: SITE LIST -> Entity_ID ---
+  // --- 2) CEK list source: SITE LIST -> Entity_ID ---
   const siteH = buildHeaderMap(wsSite);
   const colEntity = siteH.get("entity_id") || siteH.get("entity id") || 1;
 
@@ -178,7 +165,7 @@ async function run(inputPath) {
 
   const cekList = Array.from(cekSet).sort((a, b) => a.localeCompare(b));
 
-  // --- 4) Output ---
+  // --- 3) Output ---
   const outWb = new ExcelJS.Workbook();
   const outWs = outWb.addWorksheet("Sheet1");
   outWs.addRow(["CEK", "STATUS"]);
@@ -190,7 +177,8 @@ async function run(inputPath) {
     }
 
     const hourMap = cekHourMax.get(cek) || new Map();
-    const lastVals = last5HourMs.map(ms => hourMap.get(ms)); // EXACT match by hourMs
+    const last5HourMs = Array.from(hourMap.keys()).sort((a, b) => a - b).slice(-5);
+    const lastVals = last5HourMs.map(ms => hourMap.get(ms)); // each CEK's own latest 5
 
     const status = decideStatus(lastVals);
     outWs.addRow([cek, status]);
@@ -203,8 +191,7 @@ async function run(inputPath) {
 
   console.log(`✅ Generated ${OUTPUT_FILE}`);
   console.log(`📌 Sheets: DATA="${wsData.name}", SITE="${wsSite.name}"`);
-  console.log(`📌 Last 5 hours (with valid data): ${last5HourMs.map(ms => new Date(ms).toISOString()).join(" | ")}`);
-  console.log(`📌 Rule: CLOSE only if ALL last-5 values <= ${THRESHOLD_LT}; missing => OPEN; no numeric => NO DATA`);
+  console.log(`📌 Rule: CLOSE only if each CEK's own last-5 values <= ${THRESHOLD_LT}; <5 data => OPEN; no numeric => NO DATA`);
   console.log(`📌 Total CEK from SITE LIST: ${cekList.length}`);
 }
 
