@@ -121,22 +121,31 @@ function buildStorageObjectPath(type, fileName) {
 }
 
 function resolveSignedUploadUrl(signedUrl, objectPath, token) {
-  if (signedUrl && /^https?:\/\//i.test(signedUrl)) {
-    return signedUrl;
-  }
-
   const base = SUPABASE_URL.replace(/\/+$/g, "");
+  let parsedUrl = null;
+
   if (signedUrl) {
-    if (signedUrl.startsWith("/storage/v1/")) return `${base}${signedUrl}`;
-    if (signedUrl.startsWith("/")) return `${base}/storage/v1${signedUrl}`;
-    return `${base}/storage/v1/${signedUrl}`;
+    try {
+      parsedUrl = new URL(signedUrl, `${base}/`);
+    } catch {
+      parsedUrl = null;
+    }
   }
 
-  if (!token) return null;
-  const encodedPath = encodeStoragePathForUrl(objectPath);
-  return `${base}/storage/v1/object/upload/sign/${SUPABASE_BUCKET}/${encodedPath}?token=${encodeURIComponent(
-    token
-  )}`;
+  if (!parsedUrl) {
+    if (!token) return null;
+    const encodedPath = encodeStoragePathForUrl(objectPath);
+    parsedUrl = new URL(
+      `/storage/v1/object/upload/sign/${SUPABASE_BUCKET}/${encodedPath}`,
+      `${base}/`
+    );
+  }
+
+  if (token && !parsedUrl.searchParams.get("token")) {
+    parsedUrl.searchParams.set("token", token);
+  }
+
+  return parsedUrl.toString();
 }
 
 function ensureSupabaseReady() {
