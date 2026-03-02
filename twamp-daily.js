@@ -128,6 +128,7 @@ async function run(inputPath) {
     throw new Error(`DATA headers must include: Time, CEK, MAX TWAMP`);
   }
 
+  const cekDaySeen = new Map();  // cek -> Set(ymd), includes rows with blank value
   const cekDayMax = new Map();   // cek -> Map(ymd -> max)
   const cekHasAnyNumeric = new Set();
 
@@ -143,10 +144,12 @@ async function run(inputPath) {
     const cekUpper = cek.toUpperCase();
     if (cekUpper === "#N/A" || cekUpper === "N/A") return;
 
+    const ymd = ymdFromMs(tMs);
+    if (!cekDaySeen.has(cek)) cekDaySeen.set(cek, new Set());
+    cekDaySeen.get(cek).add(ymd);
+
     const v = toNumber(row.getCell(colVal).value);
     if (v === null) return; // # or - or empty => skip
-
-    const ymd = ymdFromMs(tMs);
 
     cekHasAnyNumeric.add(cek);
 
@@ -181,9 +184,10 @@ async function run(inputPath) {
       continue;
     }
 
+    const seenDays = Array.from(cekDaySeen.get(cek) || []).sort();
+    const lastDays = seenDays.slice(-WINDOW_DAYS); // each CEK's own latest day slots (blank included)
     const dayMap = cekDayMax.get(cek) || new Map();
-    const lastDays = Array.from(dayMap.keys()).sort().slice(-WINDOW_DAYS);
-    const lastVals = lastDays.map(ymd => dayMap.get(ymd));
+    const lastVals = lastDays.map(ymd => (dayMap.has(ymd) ? dayMap.get(ymd) : null));
 
     const status = decideStatus(lastVals);
     outWs.addRow([cek, status]);
@@ -197,7 +201,7 @@ async function run(inputPath) {
   console.log(`✅ Generated ${OUTPUT_FILE}`);
   console.log(`📌 Sheet: DATA="${wsData.name}", SITE="${wsSite.name}"`);
   console.log(`📌 WINDOW_DAYS=${WINDOW_DAYS}`);
-  console.log(`📌 Rule: CLOSE only if each CEK's own last ${WINDOW_DAYS} day(s) ALL < ${THRESHOLD_LT}; missing/<window => OPEN; no numeric => NO DATA`);
+  console.log(`📌 Rule: CLOSE only if each CEK's own last ${WINDOW_DAYS} day slot(s) are all numeric < ${THRESHOLD_LT}; blank/<window => OPEN; no numeric => NO DATA`);
   console.log(`📌 Total CEK from SITE LIST: ${cekList.length}`);
 }
 

@@ -122,7 +122,8 @@ async function run(inputPath) {
     throw new Error(`DATA headers must include: Time, CEK, S1 Success Rate`);
   }
 
-  const cekHourMax = new Map(); // cek -> Map(hourMs -> max)
+  const cekHourSeen = new Map(); // cek -> Set(hourMs), includes rows with blank value
+  const cekHourMax = new Map(); // cek -> Map(hourMs -> max numeric value)
   const cekHasAnyNumeric = new Set();
 
   wsData.eachRow((row, rowNumber) => {
@@ -135,6 +136,8 @@ async function run(inputPath) {
     if (!cek) return;
 
     const hourMs = floorToHourMs(tMs);
+    if (!cekHourSeen.has(cek)) cekHourSeen.set(cek, new Set());
+    cekHourSeen.get(cek).add(hourMs);
 
     const v = toNumber(row.getCell(colVal).value);
     if (v === null) return;
@@ -172,9 +175,10 @@ async function run(inputPath) {
       continue;
     }
 
+    const seenHours = Array.from(cekHourSeen.get(cek) || []).sort((a, b) => a - b);
+    const last5HourMs = seenHours.slice(-5); // each CEK's own latest 5 slots (blank included)
     const hourMap = cekHourMax.get(cek) || new Map();
-    const last5HourMs = Array.from(hourMap.keys()).sort((a, b) => a - b).slice(-5);
-    const lastVals = last5HourMs.map(ms => hourMap.get(ms)); // each CEK's own latest 5
+    const lastVals = last5HourMs.map(ms => (hourMap.has(ms) ? hourMap.get(ms) : null));
 
     const status = decideStatus(lastVals);
     outWs.addRow([cek, status]);
@@ -187,7 +191,7 @@ async function run(inputPath) {
 
   console.log(`✅ Generated ${OUTPUT_FILE}`);
   console.log(`📌 Sheets: DATA="${wsData.name}", SITE="${wsSite.name}"`);
-  console.log(`📌 Rule: CLOSE only if each CEK's own last-5 values >= ${THRESHOLD_GT}; missing/<5 => OPEN; no numeric => NO DATA`);
+  console.log(`📌 Rule: CLOSE only if each CEK's own last-5 slots are all numeric >= ${THRESHOLD_GT}; blank/<5 => OPEN; no numeric => NO DATA`);
   console.log(`📌 Total CEK from SITE LIST: ${cekList.length}`);
 }
 

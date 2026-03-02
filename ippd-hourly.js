@@ -96,6 +96,7 @@ function isDataSheetName(name) {
 }
 
 async function run(inputPath) {
+  const towerHourSeen = new Map();  // towerId -> Set(hourMs), includes rows with blank value
   const towerHourMax = new Map();   // towerId -> Map(hourMs -> max packet loss)
   const towerHasAnyNumeric = new Set();
   const towerSet = new Set();
@@ -150,6 +151,8 @@ async function run(inputPath) {
       const tMs = getDateMs(values[colTime]);
       if (tMs === null) continue;
       const hourMs = floorToHourMs(tMs);
+      if (!towerHourSeen.has(towerId)) towerHourSeen.set(towerId, new Set());
+      towerHourSeen.get(towerId).add(hourMs);
 
       const v = toPercentNumber(values[colVal]);
       if (v === null) continue;
@@ -182,9 +185,10 @@ async function run(inputPath) {
       continue;
     }
 
+    const seenHours = Array.from(towerHourSeen.get(towerId) || []).sort((a, b) => a - b);
+    const last5HourMs = seenHours.slice(-5); // each tower's own latest 5 slots (blank included)
     const hourMap = towerHourMax.get(towerId) || new Map();
-    const last5HourMs = Array.from(hourMap.keys()).sort((a, b) => a - b).slice(-5);
-    const lastVals = last5HourMs.map(ms => hourMap.get(ms));
+    const lastVals = last5HourMs.map(ms => (hourMap.has(ms) ? hourMap.get(ms) : null));
     const status = decideStatus(lastVals);
     outWs.addRow([towerId, status]);
   }
@@ -196,7 +200,7 @@ async function run(inputPath) {
 
   console.log(`✅ Generated ${OUTPUT_FILE}`);
   console.log(`📌 Sheet DATA="${parsedSheetName}"`);
-  console.log(`📌 Rule: CLOSE only if each tower's own last-5 values <= ${THRESHOLD_PERCENT}% (percent mode); <5 data => OPEN; no numeric => NO DATA`);
+  console.log(`📌 Rule: CLOSE only if each tower's own last-5 slots are all numeric <= ${THRESHOLD_PERCENT}% (percent mode); blank/<5 => OPEN; no numeric => NO DATA`);
   console.log(`📌 Total TOWER_ID from DATA: ${towerList.length}`);
 }
 
