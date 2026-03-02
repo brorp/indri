@@ -59,6 +59,23 @@ const WPC = {
   TWAMP: "TWAMP PACKET LOSS", // file bisa "TWAMP" saja -> kita handle juga
 };
 
+function normalizeWpcNameUpper(raw) {
+  const t = normText(raw).toUpperCase();
+  if (!t) return t;
+
+  if (t.includes("AVG CQI")) return WPC.AVG_CQI;
+  if (t.includes("AVG DL SE")) return WPC.AVG_DL_SE;
+  if (t.includes("S1") && t.includes("SUCCESS")) return WPC.S1;
+  if (t.includes("UE DL") && t.includes("THROUGHPUT")) return WPC.UE_DL;
+  if (t.includes("UE UL") && t.includes("THROUGHPUT")) return WPC.UE_UL;
+  if (t.includes("IPPD") && t.includes("LOSS")) return WPC.IPPD;
+  if (t.includes("DL TRAFFIC")) return WPC.DL_TRAFFIC;
+  if (t.includes("RRC") && t.includes("USER")) return WPC.RRC;
+  if (t.includes("TWAMP")) return WPC.TWAMP;
+
+  return t;
+}
+
 // ---------------- Helpers ----------------
 function normText(x) {
   // minimal normalization (safe): trim + remove NBSP/zero-width
@@ -329,7 +346,7 @@ async function main() {
     const entity = normText(row.getCell(cEntity).value);
     if (!entity) return;
 
-    const wpcNameUpper = normText(row.getCell(cWpc).value).toUpperCase();
+    const wpcNameUpper = normalizeWpcNameUpper(row.getCell(cWpc).value);
 
     // DATA (MOEntity based)
     if (
@@ -349,7 +366,7 @@ async function main() {
     if (wpcNameUpper === WPC.DL_TRAFFIC || wpcNameUpper === WPC.RRC) needed.plmnKeys.add(entity);
 
     // TWAMP (Row Labels based)
-    if (wpcNameUpper === WPC.TWAMP || wpcNameUpper === "TWAMP") needed.twampKeys.add(entity);
+    if (wpcNameUpper === WPC.TWAMP) needed.twampKeys.add(entity);
   });
 
   console.log("Collect keys:", {
@@ -379,7 +396,7 @@ async function main() {
     if (r === 1) return;
 
     const entity = normText(row.getCell(cEntity).value);
-    const wpcNameUpper = normText(row.getCell(cWpc).value).toUpperCase();
+    const wpcNameUpper = normalizeWpcNameUpper(row.getCell(cWpc).value);
     const day7 = row.getCell(cDay7).value;
 
     // ---- 1-9: Fill KPI D-1 strictly per WPC Name ----
@@ -426,7 +443,7 @@ async function main() {
       if (rec && rec.rrc !== null && rec.rrc !== undefined) {
         kpiValue = rec.rrc; found = true;
       }
-    } else if (wpcNameUpper === WPC.TWAMP || wpcNameUpper === "TWAMP") {
+    } else if (wpcNameUpper === WPC.TWAMP) {
       const v = maps.TWAMP.get(entity);
       if (v !== undefined && v !== null) {
         kpiValue = v; found = true;
@@ -447,7 +464,7 @@ async function main() {
 
     // ---- 10-11: Non IPPD/TWAMP -> if O would be YES -> Status = KPI Normalized ----
     // We'll compute YES using the same formula logic based on updated KPI D-1 and Day-7
-    if (wpcNameUpper !== WPC.IPPD && wpcNameUpper !== WPC.TWAMP && wpcNameUpper !== "TWAMP") {
+    if (wpcNameUpper !== WPC.IPPD && wpcNameUpper !== WPC.TWAMP) {
       const yesOpen = yesOpenByFormula(wpcNameUpper, found ? kpiValue : null, day7);
       if (yesOpen === "YES") {
         row.getCell(cStatus).value = "KPI Normalized";

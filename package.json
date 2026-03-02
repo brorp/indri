@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test:wpcsdm-transform": "node tests/wpcsdm-transform.test.js",
+    "review:wpcsdm": "node tests/wpcsdm-review.js"
   },
   "engines": {
     "node": ">=18"

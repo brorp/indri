@@ -222,6 +222,16 @@ button.ghost {
   color: #8a607b;
 }
 
+.companion-note {
+  margin: 0 0 0.35rem;
+  line-height: 1.45;
+}
+
+.companion-note code {
+  font-family: "Courier New", monospace;
+  font-size: 0.82rem;
+}
+
 .error {
   margin-top: 0.75rem;
   color: var(--error);

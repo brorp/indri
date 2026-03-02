@@ -91,6 +91,33 @@ function sanitizeFileName(name, fallback = "input.xlsx") {
   return cleaned;
 }
 
+function deriveWpcOutputName(mode, originalInputName) {
+  const safeInput = sanitizeFileName(originalInputName, "wpcsdm_wpc_export_default.xlsx");
+  const lower = safeInput.toLowerCase();
+
+  if (mode === "wpc-transform") {
+    if (lower.endsWith("_default.xlsx")) {
+      return safeInput.replace(/_default\.xlsx$/i, "_result.xlsx");
+    }
+    if (lower.endsWith(".xlsx")) {
+      return safeInput.replace(/\.xlsx$/i, "_result.xlsx");
+    }
+    return `${safeInput}_result.xlsx`;
+  }
+
+  if (mode === "wpc-step1") {
+    if (lower.endsWith("_default.xlsx")) {
+      return safeInput.replace(/_default\.xlsx$/i, "_step1.xlsx");
+    }
+    if (lower.endsWith(".xlsx")) {
+      return safeInput.replace(/\.xlsx$/i, "_step1.xlsx");
+    }
+    return `${safeInput}_step1.xlsx`;
+  }
+
+  return "output.xlsx";
+}
+
 function sanitizePathSegment(value, fallback = "misc") {
   const cleaned = String(value || "")
     .trim()
@@ -410,7 +437,7 @@ async function executeAnalyzer({ type, originalName, fileBuffer, companions, sto
         assetEnvVarName: "BOT_INDRI_SFXL_PATH",
         managedStorageCleanupPaths,
       });
-      explicitOutputPath = path.join(jobDir, "output-wpcsdm-step1.xlsx");
+      explicitOutputPath = path.join(jobDir, deriveWpcOutputName(cfg.mode, inputName));
 
       args.push("--wpc", inputPath, "--sfxl", sfxlPath, "--out", explicitOutputPath);
     } else if (cfg.mode === "wpc-transform") {
@@ -438,7 +465,7 @@ async function executeAnalyzer({ type, originalName, fileBuffer, companions, sto
         assetEnvVarName: "BOT_INDRI_TAGGING_PATH",
         managedStorageCleanupPaths,
       });
-      explicitOutputPath = path.join(jobDir, "output-wpcsdm-transform.xlsx");
+      explicitOutputPath = path.join(jobDir, deriveWpcOutputName(cfg.mode, inputName));
 
       args.push(
         "--wpc", inputPath,

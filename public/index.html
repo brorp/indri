@@ -48,6 +48,14 @@
 
         <section class="companion hidden" id="companion-fields">
           <h3>File pendukung WPCSDM</h3>
+          <p class="note companion-note">
+            Template nama file:
+            <br />- File utama: <code>wpcsdm_wpc_export_[tanggal]_default.xlsx</code>
+            <br />- SFXL: <code>NEW SFXL [tanggal].xlsx</code>
+            <br />- Sitelist: <code>sitelist_mocn_[tanggal].csv</code> atau <code>.xlsx</code>
+            <br />- Tagging: <code>TAGGING [tanggal].xlsx</code>
+            <br />Output: <code>wpcsdm_wpc_export_[tanggal]_result.xlsx</code>
+          </p>
 
           <label for="companion-sfxl">Upload SFXL</label>
           <input id="companion-sfxl" type="file" accept=".xlsx" />
@@ -67,7 +75,7 @@
         <p id="loading-text">Memproses data</p>
       </div>
 
-      <p class="note">Catatan: limit aplikasi 70MB per file (local/self-host). Jika deploy di Vercel, body request function sekitar 4.5MB.</p>
+      <p class="note">Catatan: jika Supabase Storage aktif, upload langsung ke bucket (tidak mengikuti limit body request Vercel). Jika belum aktif, fallback tetap ada limit payload.</p>
 
       <p class="error hidden" id="analyze-error"></p>
 
